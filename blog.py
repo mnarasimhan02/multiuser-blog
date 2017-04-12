@@ -143,6 +143,98 @@ class Signup(BlogHandler):
         else:
             self.redirect('/unit2/welcome?username=' + username)
 
+
+# User sign up functionality
+
+def users_key(group='default'):
+    return db.Key.from_path('users', group)
+
+
+def make_salt(length=5):
+    return ''.join(random.choice(letters) for x in xrange(length))
+
+
+def make_pw_hash(name, password, salt=None):
+    if not salt:
+        salt = make_salt()
+    h = hashlib.sha256(name + password + salt).hexdigest()
+    return '%s,%s' % (salt, h)
+
+
+def valid_pw(name, password, h):
+    salt = h.split(',')[0]
+    return h == make_pw_hash(name, password, salt)
+
+
+class User(db.Model):
+    name = db.StringProperty(required=True)
+    pw_hash = db.StringProperty(required=True)
+    email = db.StringProperty()
+
+    @classmethod
+    def register(cls, name, pw, email=None):
+        pw_hash = make_pw_hash(name, pw)
+        return User(parent=users_key(),
+                    name=name,
+                    pw_hash=pw_hash,
+                    email=email)
+
+    @classmethod
+    def by_id(cls, uid):
+        return User.get_by_id(uid, parent=users_key())
+
+    @classmethod
+    def login(cls, username, password):
+        u = User.by_name(username)
+        if u and valid_pw(username, password, u.pw_hash):
+            return u
+
+    @classmethod
+    def by_name(cls, name):
+        u = User.all().filter('name =', name).get()
+        return u
+
+
+class Register(Signup):
+
+    def done(self):
+        u = User.by_name(self.username)
+
+        if u:
+            msg = 'That user already exists.'
+            self.render('signup-form.html', error=msg)
+        else:
+            u = User.register(self.username, self.password, self.email)
+            u.put()
+
+            self.login(u)
+            self.redirect('/blog')
+
+
+class Logout(BlogHandler):
+
+    def get(self):
+        self.logout()
+        self.redirect('/blog')
+
+
+class Login(BlogHandler):
+
+    def get(self):
+        self.render('login-form.html')
+
+    def post(self):
+        username = self.request.get('username')
+        password = self.request.get('password')
+
+        u = User.login(username, password)
+        if u:
+            self.login(u)
+            self.redirect('/blog')
+        else:
+            msg = 'Invalid Username or Password'
+            self.render('login-form.html', error=msg)
+
 class Welcome(BlogHandler):
     def get(self):
         username = self.request.get('username')
@@ -150,6 +242,186 @@ class Welcome(BlogHandler):
             self.render('welcome.html', username = username)
         else:
             self.redirect('/unit2/signup')
+
+class Delete(BlogHandler):
+
+    def get(self, post_id, post_user_id):
+        if self.user and self.user.key().id() == int(post_user_id):
+            key = db.Key.from_path('Post', int(post_id), parent=blog_key())
+            post = db.get(key)
+            post.delete()
+
+            self.redirect('/blog')
+
+        elif not self.user:
+            self.redirect('/login')
+
+        else:
+            self.write("You don't have permission to delete this post")
+
+
+class EditPost(BlogHandler):
+
+    def get(self, post_id):
+        key = db.Key.from_path('Post', int(post_id), parent=blog_key())
+        post = db.get(key)
+
+        if self.user and self.user.key().id() == post.user_id:
+            self.render('editpost.html', subject=post.subject,
+                        content=post.content, post_id=post_id)
+        elif not self.user:
+            self.redirect('/login')
+        else:
+            self.write(
+                "You cannot edit this post becuase you are not the one who wrote this post.")
+
+    def post(self, post_id):
+        subject = self.request.get('subject')
+        content = self.request.get('content')
+
+        if subject and content:
+            key = db.Key.from_path('Post', int(post_id), parent=blog_key())
+            post = db.get(key)
+
+            post.subject = subject
+            post.content = content
+
+            post.put()
+
+            self.redirect('/blog/%s' % str(post.key().id()))
+        else:
+            error = "subject and content, please!"
+            self.render("newpost.html", subject=subject,
+                        content=content, error=error)
+
+
+class LikePost(BlogHandler):
+
+    def get(self, post_id):
+        key = db.Key.from_path('Post', int(post_id), parent=blog_key())
+        post = db.get(key)
+
+        if self.user and self.user.key().id() == post.user_id:
+            self.write("You cannot like your own post")
+        elif not self.user:
+            self.redirect('/login')
+        else:
+            l = Like.all().filter('user_id =', self.user.key().id()
+                                  ).filter('post_id =', post.key().id()).get()
+
+            if l:
+                self.redirect('/blog/' + str(post.key().id()))
+            else:
+                like = Like(parent=key, user_id=self.user.key().id(),
+                            post_id=post.key().id())
+                post.likes += 1
+
+                like.put()
+                post.put()
+
+                self.redirect('/blog/' + str(post.key().id()))
+
+
+class UnlikePost(BlogHandler):
+
+    def get(self, post_id):
+        key = db.Key.from_path('Post', int(post_id), parent=blog_key())
+        post = db.get(key)
+
+        if self.user and self.user.key().id() == post.user_id:
+            self.write("You cannot dislike your own post")
+        elif not self.user:
+            self.redirect('/login')
+        else:
+            l = Like.all().filter('user_id =', self.user.key().id()
+                                  ).filter('post_id =', post.key().id()).get()
+
+            if l:
+                l.delete()
+                post.likes -= 1
+                post.put()
+
+                self.redirect('/blog/' + str(post.key().id()))
+            else:
+                self.redirect('/blog/' + str(post.key().id()))
+
+
+class Like(db.Model):
+    created = db.DateTimeProperty(auto_now_add=True)
+    last_modified = db.DateTimeProperty(auto_now=True)
+    user_id = db.IntegerProperty(required=True)
+    post_id = db.IntegerProperty(required=True)
+
+
+class Comment(db.Model):
+    content = db.TextProperty(required=True)
+    created = db.DateTimeProperty(auto_now_add=True)
+    last_modified = db.DateTimeProperty(auto_now=True)
+    user_id = db.IntegerProperty(required=True)
+
+
+class AddComment(BlogHandler):
+
+    def get(self, post_id, user_id):
+        self.render("addcomment.html")
+
+    def post(self, post_id, user_id):
+        content = self.request.get('content')
+
+        key = db.Key.from_path('Post', int(post_id), parent=blog_key())
+
+        c = Comment(parent=key, user_id=int(user_id), content=content)
+        c.put()
+
+        self.redirect('/blog/' + post_id)
+
+
+class DeleteComment(BlogHandler):
+
+    def get(self, post_id, post_user_id, comment_id):
+
+        if self.user and self.user.key().id() == int(post_user_id):
+            postKey = db.Key.from_path('Post', int(post_id), parent=blog_key())
+            key = db.Key.from_path('Comment', int(comment_id), parent=postKey)
+            comment = db.get(key)
+            comment.delete()
+
+            self.redirect('/blog/' + post_id)
+
+        elif not self.user:
+            self.redirect('/login')
+
+        else:
+            self.write("You don't have permission to delete this comment.")
+
+
+class EditComment(BlogHandler):
+
+    def get(self, post_id, post_user_id, comment_id):
+        if self.user and self.user.key().id() == int(post_user_id):
+            postKey = db.Key.from_path('Post', int(post_id), parent=blog_key())
+            key = db.Key.from_path('Comment', int(comment_id), parent=postKey)
+            comment = db.get(key)
+
+            self.render('editcomment.html', content=comment.content)
+
+        elif not self.user:
+            self.redirect('/login')
+
+        else:
+            self.write("You don't have permission to delete this comment.")
+
+    def post(self, post_id, post_user_id, comment_id):
+        content = self.request.get('content')
+
+        postKey = db.Key.from_path('Post', int(post_id), parent=blog_key())
+        key = db.Key.from_path('Comment', int(comment_id), parent=postKey)
+        comment = db.get(key)
+
+        comment.content = content
+        comment.put()
+
+        self.redirect('/blog/' + post_id)
 
 app = webapp2.WSGIApplication([('/', MainPage),
                                ('/unit2/rot13', Rot13),
