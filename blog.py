@@ -239,7 +239,7 @@ class EditPost(BlogHandler):
 
             if post.user_id == self.user.key().id():
                 self.render("editpost.html", subject=post.subject,
-                            content=post.content)
+                            content=post.content,post_id=post_id)
             else:
                 self.redirect("/blog/" + post_id + "?error=You don't have " +
                               "access to edit this record.")
@@ -251,23 +251,32 @@ class EditPost(BlogHandler):
         """
             Updates post.
         """
-        if not self.user:
-            self.redirect('/blog')
-    
-        subject = self.request.get('subject')
-        content = self.request.get('content')
-
-        if subject and content:
+        if self.user:
             key = db.Key.from_path('Post', int(post_id), parent=blog_key())
             post = db.get(key)
-            post.subject = subject
-            post.content = content
-            post.put()
-            self.redirect('/blog/%s' % post_id)
+           
+            if not post:
+                self.redirect("/")
+                return
+
+            if post.user_id == self.user.key().id():
+                subject = self.request.get('subject')
+                content = self.request.get('content')
+                if subject and content:
+                    post.subject = subject
+                    post.content = content
+                    post.put()
+                    self.redirect('/blog/%s' % post_id)
+                else:
+                    error = "subject and content, please!"
+                    self.render("editpost.html", subject=subject,
+                                content=content, error=error)
+            else:
+                self.redirect("/blog/" + post_id + "?error=You don't have " +
+                              "access to edit this record.")
         else:
-            error = "subject and content, please!"
-            self.render("editpost.html", subject=subject,
-                        content=content, error=error)
+            self.redirect("/login?error=You need to be logged, " +
+                          "in order to edit your post!!")
 
 
 class DeleteComment(BlogHandler):
@@ -318,23 +327,33 @@ class EditComment(BlogHandler):
     def post(self, post_id, comment_id):
         """
             Updates post.
-        """
-        if not self.user:
-            self.redirect('/blog')
-
-        comment = self.request.get('comment')
-
-        if comment:
-            key = db.Key.from_path('Comment',
-                                   int(comment_id), parent=blog_key())
+        """        
+        if self.user:
+            key = db.Key.from_path('Comment', int(comment_id),
+                                   parent=blog_key())
             c = db.get(key)
-            c.comment = comment
-            c.put()
-            self.redirect('/blog/%s' % post_id)
+           
+            if not c:
+                self.redirect("/")
+                return
+                
+            if c.user_id == self.user.key().id():
+                comment = self.request.get('comment')
+                if comment:
+                    c.comment = comment
+                    c.put()
+                    self.redirect('/blog/%s' % post_id)
+                else:
+                    error = "subject and content, please!"
+                    self.render("editpost.html", subject=subject,
+                                content=content, error=error)
+            else:
+                self.redirect("/blog/" + post_id +
+                              "?error=You don't have access to edit this " +
+                              "comment.")
         else:
-            error = "subject and content, please!"
-            self.render("editpost.html", subject=subject,
-                        content=content, error=error)
+            self.redirect("/login?error=You need to be logged, in order to" +
+                          " edit your post!!")
 
 USER_RE = re.compile(r"^[a-zA-Z0-9_-]{3,20}$")
 
